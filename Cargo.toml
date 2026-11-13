@@ -1,0 +1,33 @@
+[package]
+name = "release-relay"
+version = "0.1.0"
+description = "Relais public des mises à jour d'applis Tauri dont le dépôt GitHub est privé : latest.json, installeurs, fichiers choisis et page de présentation"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/powange/release-relay"
+publish = false
+
+[dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync"] }
+tower = { version = "0.5", features = ["limit", "util"] }
+tower-http = { version = "0.6", features = ["timeout"] }
+# Certificats racine intégrés (l'image n'a pas de magasin de certificats)
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+# preserve_order : latest.json est renvoyé avec ses clés dans l'ordre d'origine
+serde_json = { version = "1", features = ["preserve_order"] }
+toml = "0.9"
+bytes = "1"
+mime_guess = "2"
+percent-encoding = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.release]
+strip = true
+lto = true
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"] }
+tower = { version = "0.5", features = ["util"] }

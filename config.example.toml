@@ -1,0 +1,30 @@
+# Config de Release Relay (montée en lecture seule dans le conteneur : /config/relay.toml).
+# Aucun secret ici : le jeton GitHub est donné par la variable d'environnement GITHUB_TOKEN.
+
+# Adresse publique du relais (celle du proxy HTTPS), sans / final : les adresses de
+# latest.json sont réécrites vers elle
+public_url = "https://releases.exemple.fr"
+
+# Facultatif : durée de cache des réponses GitHub, en secondes (défaut : 60). Si GitHub ne
+# répond plus, la dernière réponse valide est resservie
+# cache_ttl = 60
+
+# Facultatif : proxys devant le serveur, pour lire l'adresse du client dans X-Forwarded-For
+# (défaut : 1 ; 2 avec Cloudflare devant le proxy ; 0 si le serveur est joint directement)
+# proxy_hops = 1
+
+# Facultatif : requêtes par minute et par adresse (défaut : 60 ; 0 : sans limite)
+# rate_limit = 60
+
+# Une section par appli : son nom est le début des adresses (/twitch-desk/latest.json…)
+[apps.twitch-desk]
+repo = "powange/twitch-desk"
+# Fichiers de la branche par défaut servis sous /twitch-desk/raw/ (aucun autre)
+raw = ["operations.json"]
+
+# Facultatif : page de présentation servie sous /twitch-desk/ (sans cette section : 404)
+[apps.twitch-desk.site]
+# Dossier du dépôt
+dir = "site"
+# Version lue : "release" (tag de la dernière release, défaut) ou "branch" (branche par défaut)
+source = "release"

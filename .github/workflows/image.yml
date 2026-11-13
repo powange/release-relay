@@ -1,0 +1,146 @@
+name: Image Docker
+
+# Image publiée sur ghcr.io/powange/release-relay à chaque modification sur main, puis
+# redéploiement de la pile Portainer par son webhook (secret PORTAINER_WEBHOOK_URL).
+# Chaque architecture est compilée sur sa propre machine (pas d'émulation), en parallèle des
+# vérifications ; l'image n'est étiquetée et déployée que si tout a réussi.
+# Demande de fusion (Dependabot…) : mêmes vérifications et mêmes images construites, sans rien
+# envoyer ni déployer
+on:
+  push:
+    branches: [main]
+    paths: ['src/**', 'tests/**', 'Cargo.toml', 'Cargo.lock', 'Dockerfile', '.dockerignore', '.github/workflows/image.yml']
+  pull_request:
+    paths: ['src/**', 'tests/**', 'Cargo.toml', 'Cargo.lock', 'Dockerfile', '.dockerignore', '.github/workflows/image.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Un seul envoi d'image à la fois : un push plus récent remplace celui en cours
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('image-pr-{0}', github.ref) || 'image' }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/release-relay
+
+jobs:
+  check:
+    name: Vérifications
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --locked
+
+  build:
+    name: Image ${{ matrix.arch }}
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # Image envoyée sans étiquette (par empreinte) : étiquetée par le job suivant ; demande de
+      # fusion : construite seulement
+      - id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.description=Relais public des mises à jour d'applis Tauri dont le dépôt GitHub est privé
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
+          cache-from: type=gha,scope=image-${{ matrix.arch }}
+          cache-to: ${{ github.event_name != 'pull_request' && format('type=gha,scope=image-{0},mode=max', matrix.arch) || '' }}
+      - if: github.event_name != 'pull_request'
+        run: |
+          mkdir -p digests
+          touch "digests/${DIGEST#sha256:}"
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: github.event_name != 'pull_request'
+        with:
+          name: digest-${{ matrix.arch }}
+          path: digests/*
+          retention-days: 1
+
+  publish:
+    name: Publication de l'image
+    needs: [check, build]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: Cargo.toml
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: digest-*
+          merge-multiple: true
+          path: digests
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # Une seule image multi-architecture, étiquetée latest, avec la version du relais, et
+      # avec version et commit (une même version recompilée reste distinguable)
+      - working-directory: digests
+        run: |
+          version=$(grep -m1 '^version' ../Cargo.toml | cut -d'"' -f2)
+          docker buildx imagetools create -t "$IMAGE:latest" -t "$IMAGE:$version" -t "$IMAGE:$version-${GITHUB_SHA::7}" \
+            $(printf "$IMAGE@sha256:%s " *)
+          docker buildx imagetools inspect "$IMAGE:$version"
+
+  deploy:
+    name: Déploiement
+    needs: publish
+    runs-on: ubuntu-24.04
+    permissions: {}
+    env:
+      # Webhook de la pile Portainer (secret du dépôt) : redéploiement une fois l'image publiée.
+      # L'adresse n'est jamais affichée (GitHub masque les secrets, curl -sS n'écrit pas l'URL)
+      PORTAINER_WEBHOOK_URL: ${{ secrets.PORTAINER_WEBHOOK_URL }}
+    steps:
+      - name: Webhook Portainer
+        run: |
+          if [ -z "$PORTAINER_WEBHOOK_URL" ]; then
+            echo "::error::Secret PORTAINER_WEBHOOK_URL absent : image publiée mais pile non redéployée"
+            exit 1
+          fi
+          curl -fsS -X POST --max-time 60 "$PORTAINER_WEBHOOK_URL" -o /dev/null
+          echo "Redéploiement demandé à Portainer"

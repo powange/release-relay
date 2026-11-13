@@ -1,0 +1,5 @@
+# Seul le code du serveur est envoyé au contexte de construction
+*
+!Cargo.toml
+!Cargo.lock
+!src

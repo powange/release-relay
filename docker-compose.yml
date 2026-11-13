@@ -1,0 +1,30 @@
+# Pile Portainer : Stacks → Add stack → Repository
+#   Repository URL : https://github.com/powange/release-relay
+#   Compose path   : docker-compose.yml
+#   Environment variables : GITHUB_TOKEN (obligatoire), RELAY_CONFIG_FILE (facultatif)
+# Le port n'est pas publié sur l'hôte : Nginx Proxy Manager joint le relais par le réseau
+# proxy-network, à l'adresse release-relay:8080
+services:
+  release-relay:
+    image: ghcr.io/powange/release-relay:latest
+    container_name: release-relay
+    restart: unless-stopped
+    environment:
+      # Jeton fine-grained en lecture seule (Contents: read), limité aux dépôts relayés
+      GITHUB_TOKEN: ${GITHUB_TOKEN:?Définis GITHUB_TOKEN dans les variables d'environnement de la pile}
+      # Journaux : info par défaut ; debug pour le détail
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      # Config de l'hôte, en lecture seule (voir config.example.toml)
+      - ${RELAY_CONFIG_FILE:-/opt/release-relay/relay.toml}:/config/relay.toml:ro
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+# Réseau du proxy HTTPS (Nginx Proxy Manager)
+networks:
+  default:
+    external: true
+    name: proxy-network
